@@ -1,0 +1,25 @@
+Python ile yazılacak bir genel bilgi ekranı paneli yapılacak.
+Panel 3 ana kolondan oluşacak.
+Sol kolon 2 ye bölünecek ve bir excelden veri çekerek güncellenecek. Ayrı bir ayarlar sekmesinden hangi excel olduğu seçilecek. Üst bölmede excelden çekilen verilerle MRB-ENG (H kolonu)da olan verilerin NCR NO (D kolonu), Part No (J kolonu), Discrepancy (G kolonu), CN/CSI (Q kolonu) verilerini alarak gösterecek. Bu göstermeler excel'in kullanıcılarının bulunduğu MRB ENG. (C kolonu)'na göre filtrelenecek. Her kullanıcı seçildiğinde sadece ona ait olan raporların bilgileri gözükecek.
+Sol kolon alt bölümde üst bölümdekilerin aynısı ama exceldeki H kolonunda EXTERNAL APPROVER olan verileri göstericek ve Note (A kolonu) bölümünü de göstercek. Bu bölümde Consultation, Stress, SNN gibi ekstra bilgiler varsa bunları kategorileyecek.
+Bu bölmedeki veriyi de excel içerisinde B03_Update_NCRs adlı makroyu çalıştırarak yenileyecek bir buton olacak.
+
+Orta bölüm tek bölümden oluşacak ve sol bölümde seçilen Rapora göre o raporla ilgili bilgileri gösterecek.
+Bu bilgiler şunlar olacak. Mailim de o raporla ilgili NCR NO geçen mailleri listeleyecek ve tıkladığımda açacak. Eğer burda bir mail içersinde "Approved", "Concurred" gibi onaylayan kelimeler geçiyorsa o maili yeşil ile highlight edecek.
+
+Yine benim seçeceğim klasörler içerisindeki mail ve pdflerden Discrepancy içerisinde geçen parça numaralarını (genelde 3 rakam, 1 harf, 4 rakam ve sonrasında - ve rakamlarla takip eder) arayarak ilgili mail ve pdfleri listeleyen, tıkladığımda açabilecek şekilde gösterecek.
+Eğer böyle bir durum varsa Sol panelde o NCR'ın yanında sarı Ünlem ile gösterecek. Önemli not: listeden gelen Part NO'ya bakarak bunu yapmaması gerekli çünkü genelde son assembly part no'su yazılıyor ve çoğu raporda aynı oluyor.
+
+Sağ bölüm ise 3'e bölünecek. Üst bölümde Benim seçeceğim klasör içerisindeki modellerin listeleneceği tıkladığımda önce CATIA V5 sonrasında tıkladığım modelin açılacağı bir bölüm.
+
+Sağ Orta bölümde, yine benim seçtiğim klasörleri gösterecek tıkladığımda o klasörü açacak.
+
+Sağ alt bölümde ise Repetetive NCRların dökümanlarına ulaşacağım bir bölüm olacak. Burada her klasörün içerisinndeki bir notepad'i okuyarak NCR'ın discrepancy'i textiyle eşleyecek. Eğer aynı ifade geçiyorsa Repetetive diye uyarı çıkaracak ve ilgili notepad'in olduğu klasörü gösterecek. tıkladığımda açılacak. Yine buradaki klasörleri ayarlar kısmında ben seçeceğim.
+
+Yukarıda anlattıklarımı yapabilmek için ekstra eklenmesi gereken şeyler varsa bana sormadan en iyi olduğunu düşündüğün şekliyle sen ekle.
+Kullanımı kolay ve şık gözüken bir GUI oluşturacak şekilde çalış.
+Anlattıklarımla çelişkiye şüpheye düştüğün yerler olursa en iyi ve en kolay olacak şekilde sen düzenle.
+Ayarlar kısmından benim tarif etmeyi unuttuğum ama değiştirebileceğim ve bu işleri kolaylaştıracağını düşündüğün kısımları yine sen ekle.
+NCR listesinin olduğu kısmı exceldeki renkleri kullanarak aynı şekilde getir. Renkler projelere göre ya da onaydan gelmesine göre değişiyor. Excelin içinden bu veriyi alacak bir kısım da hazırla.
+
+
