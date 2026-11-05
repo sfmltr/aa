@@ -169,6 +169,23 @@ class SettingsDialog(QDialog):
         self.ol_max.setRange(10, 2000)
         self.ol_max.setValue(o.max_results)
         form.addRow("Klasör başına en fazla sonuç:", self.ol_max)
+        self.ol_bulk = QCheckBox("NCR listesi yenilenince tüm NCR'lar için toplu tara (önerilir)")
+        self.ol_bulk.setChecked(o.bulk_on_refresh)
+        form.addRow("", self.ol_bulk)
+        self.ol_recheck = QSpinBox()
+        self.ol_recheck.setRange(0, 1440)
+        self.ol_recheck.setValue(o.recheck_minutes)
+        self.ol_recheck.setSuffix(" dk")
+        self.ol_recheck.setToolTip("NCR'a tıklandığında, son kontrol bu süreden eskiyse yalnızca yeni gelen mailler aranır")
+        form.addRow("Tıklamada yeni mail kontrolü:", self.ol_recheck)
+        self.ol_chunk = QSpinBox()
+        self.ol_chunk.setRange(1, 200)
+        self.ol_chunk.setValue(o.chunk_size)
+        self.ol_chunk.setToolTip("Toplu taramada tek Outlook sorgusunda aranacak NCR sayısı")
+        form.addRow("Sorgu başına NCR:", self.ol_chunk)
+        self.ol_start = QCheckBox("Outlook kapalıysa başlat (önerilmez: arka planda gizli Outlook açılır)")
+        self.ol_start.setChecked(o.start_outlook_if_closed)
+        form.addRow("", self.ol_start)
         self.ol_approve = QLineEdit(_csv(o.approval_keywords))
         form.addRow("Onay kelimeleri (yeşil):", self.ol_approve)
         self.ol_reject = QLineEdit(_csv(o.rejection_keywords))
@@ -210,7 +227,15 @@ class SettingsDialog(QDialog):
         c = self.cfg.catia
         form = self._tab("CATIA")
         self.ca_exe = QLineEdit(c.exe_path)
-        form.addRow("CNEXT.exe yolu:", self._file_row(self.ca_exe, "CATIA (CNEXT.exe);;Tümü (*)"))
+        self.ca_exe.setToolTip("CNEXT.exe veya masaüstündeki CATIA kısayolu (.lnk). Kısayol seçilirse "
+                               "ortam ayarları (-env / -direnv) kısayoldan gelir.")
+        form.addRow("CATIA (CNEXT.exe / kısayol):",
+                    self._file_row(self.ca_exe, "CATIA (*.exe *.lnk *.bat);;Tümü (*)"))
+        self.ca_args = QLineEdit(c.launch_args)
+        self.ca_args.setPlaceholderText('-env B28 -direnv "C:\\ProgramData\\DassaultSystemes\\CATEnv"')
+        self.ca_args.setToolTip("CNEXT.exe seçildiyse: CATIA kısayolunuzun Özellikler → Hedef alanındaki "
+                                "CNEXT.exe'den sonraki kısmı buraya yapıştırın.")
+        form.addRow("Başlatma argümanları:", self.ca_args)
         self.ca_folder = QLineEdit(c.models_folder)
         form.addRow("Model klasörü:", self._file_row(self.ca_folder, "", folder=True))
         self.ca_ext = QLineEdit(_csv(c.extensions))
@@ -218,13 +243,11 @@ class SettingsDialog(QDialog):
         self.ca_rec = QCheckBox("Alt klasörleri de tara")
         self.ca_rec.setChecked(c.recursive)
         form.addRow("", self.ca_rec)
-        self.ca_com = QCheckBox("Modeli COM ile aç (CATIA.Application) — önerilir")
-        self.ca_com.setChecked(c.use_com)
-        form.addRow("", self.ca_com)
-        self.ca_wait = QSpinBox()
-        self.ca_wait.setRange(5, 300)
-        self.ca_wait.setValue(c.startup_wait_s)
-        form.addRow("CATIA açılış beklemesi (sn):", self.ca_wait)
+        info = QLabel("Model açılırken CATIA asla yeniden başlatılmaz: önce 'CATIA'yı başlat', CATIA açıldıktan "
+                      "sonra modeli çift tıklayın. Zaten açık bir model tekrar açılmaz, penceresi öne gelir.")
+        info.setWordWrap(True)
+        info.setObjectName("muted")
+        form.addRow(info)
 
     # ---- quick folders ---------------------------------------------------------
     def _build_folders(self):
@@ -350,6 +373,10 @@ class SettingsDialog(QDialog):
         o.max_results = self.ol_max.value()
         o.approval_keywords = _parse_csv(self.ol_approve.text())
         o.rejection_keywords = _parse_csv(self.ol_reject.text())
+        o.bulk_on_refresh = self.ol_bulk.isChecked()
+        o.recheck_minutes = self.ol_recheck.value()
+        o.chunk_size = self.ol_chunk.value()
+        o.start_outlook_if_closed = self.ol_start.isChecked()
 
         f = c.files
         f.folders = self.fs_folders.items()
@@ -372,8 +399,7 @@ class SettingsDialog(QDialog):
         ca.models_folder = self.ca_folder.text().strip()
         ca.extensions = [e if e.startswith(".") else "." + e for e in _parse_csv(self.ca_ext.text())]
         ca.recursive = self.ca_rec.isChecked()
-        ca.use_com = self.ca_com.isChecked()
-        ca.startup_wait_s = self.ca_wait.value()
+        ca.launch_args = self.ca_args.text().strip()
 
         c.ui.quick_folders = self.qf.items()
 
@@ -404,6 +430,7 @@ class SettingsDialog(QDialog):
                 if name.strip():
                     cats[name.strip()] = _parse_csv(kws) or [name.strip()]
         u.categories = cats or u.categories
+        c.normalize_paths()
         self.accept()
 
     def result_config(self) -> AppConfig:

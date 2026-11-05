@@ -61,6 +61,10 @@ class OutlookSettings:
         "approved", "concurred", "concur", "approve", "accepted", "agreed", "onaylandı", "uygundur"])
     rejection_keywords: list[str] = field(default_factory=lambda: [
         "not approved", "rejected", "disapproved", "not concurred", "reddedildi"])
+    bulk_on_refresh: bool = True        # search every listed NCR when the Excel list is (re)loaded
+    recheck_minutes: int = 3            # clicking an NCR re-checks new mail only if older than this
+    start_outlook_if_closed: bool = False
+    chunk_size: int = 40                # NCR numbers per Outlook query during the bulk scan
 
 
 @dataclass
@@ -84,6 +88,8 @@ class CatiaSettings:
     recursive: bool = True
     startup_wait_s: int = 25
     use_com: bool = True
+    launch_args: str = ""               # e.g. -env B28 -direnv "C:\\ProgramData\\DassaultSystemes\\CATEnv"
+    only_matching_models: bool = False  # model list shows only models matching the NCR's part numbers
 
 
 @dataclass
@@ -146,12 +152,23 @@ class AppConfig:
         if not path.exists():
             return cls()
         try:
-            return cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
+            return cls.from_dict(json.loads(path.read_text(encoding="utf-8"))).normalize_paths()
         except (OSError, ValueError):
             return cls()
 
     def copy(self) -> "AppConfig":
         return AppConfig.from_dict(self.to_dict())
+
+    def normalize_paths(self) -> "AppConfig":
+        """Convert stored paths to native form (UNC '//server/x' -> '\\\\server\\x' on Windows)."""
+        from .utils import norm_path
+        self.excel.path = norm_path(self.excel.path)
+        self.catia.models_folder = norm_path(self.catia.models_folder)
+        self.catia.exe_path = norm_path(self.catia.exe_path)
+        self.files.folders = [norm_path(p) for p in self.files.folders if p]
+        self.repetitive.folders = [norm_path(p) for p in self.repetitive.folders if p]
+        self.ui.quick_folders = [norm_path(p) for p in self.ui.quick_folders if p]
+        return self
 
 
 def _merge_dataclass(instance: Any, data: dict[str, Any]) -> Any:

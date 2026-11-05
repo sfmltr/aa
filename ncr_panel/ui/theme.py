@@ -30,6 +30,10 @@ def build_stylesheet(theme: str, font_size: int = 10) -> str:
     QLabel#banner {{ border-radius: 8px; padding: 8px 12px; font-weight: 600; }}
     QLabel#bannerWarn {{ background: {p['warn']}; color: {p['warn_text']}; border-radius: 8px; padding: 8px 12px; font-weight: 700; }}
     QLabel#bannerOk {{ background: {p['ok']}; color: {p['ok_text']}; border-radius: 8px; padding: 8px 12px; font-weight: 600; }}
+    QPushButton#chipButton {{ background: {p['sel']}; color: {p['text']}; border: 1px solid transparent; border-radius: 9px; padding: 2px 9px; font-family: Consolas, 'Cascadia Mono', monospace; }}
+    QPushButton#chipButton:hover {{ border-color: {p['accent']}; }}
+    QPushButton#chipButton:pressed {{ background: {p['accent']}; color: {p['accent_text']}; }}
+    QPushButton#small {{ padding: 2px 8px; }}
     QLabel#chip {{ background: {p['sel']}; color: {p['text']}; border-radius: 9px; padding: 2px 8px; }}
     QToolBar {{ background: {p['panel']}; border-bottom: 1px solid {p['border']}; spacing: 6px; padding: 4px; }}
     QToolButton {{ background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 5px 9px; }}

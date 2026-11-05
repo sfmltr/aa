@@ -7,16 +7,16 @@ from typing import Callable
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QBrush, QColor, QGuiApplication
-from PySide6.QtWidgets import (QAbstractItemView, QGridLayout, QHeaderView, QLabel, QMenu, QPlainTextEdit,
+from PySide6.QtWidgets import (QAbstractItemView, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QMenu, QPlainTextEdit,
                                QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ..config import AppConfig
 from ..excel_data import NcrRecord
 from ..file_search import FileHit, FileIndex
-from ..outlook_mail import MailHit, open_mail, outlook_available, search_mails
+from ..outlook_mail import MailHit
 from ..utils import human_size, open_path, reveal_in_folder
-from .widgets import Card, Chip, FlowRow, elide, set_tooltip_rich
-from .workers import run_in_background
+from .widgets import Card, Chip, CopyChip, FlowRow, set_tooltip_rich
+from .mail_service import MailService
 
 ROLE = Qt.UserRole + 1
 
@@ -25,13 +25,16 @@ class CenterPanel(QWidget):
     status = Signal(str)
     error = Signal(str)
 
-    def __init__(self, cfg: AppConfig, index_getter: Callable[[], FileIndex], parent=None):
+    def __init__(self, cfg: AppConfig, index_getter: Callable[[], FileIndex], mail: MailService, parent=None):
         super().__init__(parent)
         self.cfg = cfg
         self._index = index_getter
+        self.mail = mail
         self.record: NcrRecord | None = None
-        self._mail_cache: dict[str, list[MailHit]] = {}
-        self._search_token = 0
+        self._hits: list[MailHit] = []
+        self._file_hits = []
+        mail.updated.connect(self.on_mail_updated)
+        mail.checked.connect(self.on_mail_checked)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -69,9 +72,17 @@ class CenterPanel(QWidget):
         self.disc.setReadOnly(True)
         self.disc.setMaximumHeight(110)
         self.card_info.add(self.disc)
-        pn_title = QLabel("Discrepancy'de geçen parça numaraları:")
+        pn_row = QHBoxLayout()
+        pn_title = QLabel("Discrepancy'de geçen parça numaraları (tıkla: kopyala):")
         pn_title.setObjectName("muted")
-        self.card_info.add(pn_title)
+        pn_row.addWidget(pn_title)
+        pn_row.addStretch(1)
+        self.btn_copy_parts = QPushButton("Tümünü kopyala")
+        self.btn_copy_parts.setObjectName("small")
+        self.btn_copy_parts.setToolTip("Bulunan tüm parça numaralarını alt alta panoya kopyala")
+        self.btn_copy_parts.clicked.connect(self._copy_parts)
+        pn_row.addWidget(self.btn_copy_parts)
+        self.card_info.add_layout(pn_row)
         self.chips = FlowRow()
         self.card_info.add(self.chips)
         note_title = QLabel("Note:")
@@ -89,9 +100,12 @@ class CenterPanel(QWidget):
         self.mail_status = QLabel("")
         self.mail_status.setObjectName("muted")
         self.card_mail.add_header_widget(self.mail_status)
-        self.btn_mail_refresh = QPushButton("⟳ Ara")
-        self.btn_mail_refresh.setToolTip("Outlook'ta bu NCR NO'yu yeniden ara")
+        self.btn_mail_refresh = QPushButton("⟳ Yeni mailler")
+        self.btn_mail_refresh.setToolTip("Bu NCR için son kontrolden sonra gelen mailleri ara.\n"
+                                         "Sağ tık: tüm geçmişi yeniden tara")
         self.btn_mail_refresh.clicked.connect(lambda: self._search_mails(force=True))
+        self.btn_mail_refresh.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.btn_mail_refresh.customContextMenuRequested.connect(self._mail_btn_menu)
         self.card_mail.add_header_widget(self.btn_mail_refresh)
         self.mails = QTableWidget(0, 5)
         self.mails.setHorizontalHeaderLabels(["Tarih", "Gönderen", "Konu", "Klasör", "Durum"])
@@ -153,9 +167,12 @@ class CenterPanel(QWidget):
         self.lbl["categories"].setText(", ".join(rec.categories) or "—")
         self.disc.setPlainText(rec.discrepancy)
         self.chips.clear()
+        self.btn_copy_parts.setEnabled(bool(rec.part_numbers))
         if rec.part_numbers:
             for p in rec.part_numbers:
-                self.chips.add(Chip(p, "Bu numara dosya aramasında kullanılır"))
+                chip = CopyChip(p, "Tıkla: panoya kopyala\n(dosya ve model aramasında kullanılır)")
+                chip.copied.connect(lambda t: self.status.emit(f"Panoya kopyalandı: {t}"))
+                self.chips.add(chip)
         else:
             self.chips.add(Chip("parça numarası bulunamadı", "Ayarlar → Dosya arama → Parça no deseni"))
         self.note.setText(rec.note or "—")
@@ -165,39 +182,50 @@ class CenterPanel(QWidget):
         self._search_mails(force=False)
 
     # ---- mails ---------------------------------------------------------
-    def _search_mails(self, force: bool):
+    def _search_mails(self, force: bool, full: bool = False):
+        """Show cached mails immediately, then look only for mail newer than the last check."""
         rec = self.record
         if rec is None:
             return
-        self.mails.setRowCount(0)
+        svc = self.mail
         if not self.cfg.outlook.enabled:
+            self.mails.setRowCount(0)
             self.mail_status.setText("Outlook araması ayarlardan kapalı")
             return
-        if not outlook_available():
+        if not svc.enabled():
+            self.mails.setRowCount(0)
             self.mail_status.setText("Outlook erişimi yok (Windows + pywin32 gerekir)")
             return
-        if not force and rec.ncr_no in self._mail_cache:
-            self._fill_mails(self._mail_cache[rec.ncr_no])
+        self._fill_mails(svc.hits(rec.ncr_no))
+        queued = svc.check_one(rec.ncr_no, force=force, full=full)
+        self._update_mail_status(checking=queued or svc.is_pending(rec.ncr_no))
+
+    def _update_mail_status(self, checking: bool = False):
+        rec = self.record
+        if rec is None:
             return
-        self._search_token += 1
-        token = self._search_token
-        self.mail_status.setText("Outlook aranıyor…")
-        self.btn_mail_refresh.setEnabled(False)
+        hits = self.mail.hits(rec.ncr_no)
+        approved = sum(1 for h in hits if h.approved)
+        txt = f"{len(hits)} e-posta" + (f", {approved} onaylı ✅" if approved else "")
+        last = self.mail.checked_at(rec.ncr_no)
+        if checking:
+            txt += "  ·  yeni mailler aranıyor…"
+        elif last:
+            txt += f"  ·  son kontrol {last:%d.%m %H:%M}"
+        elif self.mail.bulk_active:
+            txt += "  ·  toplu tarama sürüyor…"
+        elif self.mail.last_error:
+            txt += "  ·  " + self.mail.last_error[:80]
+        self.mail_status.setText(txt)
 
-        def done(hits):
-            self.btn_mail_refresh.setEnabled(True)
-            if token != self._search_token:
-                return
-            self._mail_cache[rec.ncr_no] = hits
-            self._fill_mails(hits)
+    def on_mail_updated(self, ncrs: set):
+        if self.record is not None and self.record.ncr_no in ncrs:
+            self._fill_mails(self.mail.hits(self.record.ncr_no))
+            self._update_mail_status(checking=self.mail.is_pending(self.record.ncr_no))
 
-        def err(msg):
-            self.btn_mail_refresh.setEnabled(True)
-            self.mail_status.setText("Outlook hatası")
-            self.error.emit("Outlook araması başarısız:\n" + msg)
-
-        run_in_background(search_mails, rec.ncr_no, self.cfg.outlook, on_done=done, on_error=err,
-                          on_progress=self.status.emit)
+    def on_mail_checked(self, ncr: str):
+        if self.record is not None and self.record.ncr_no == ncr:
+            self._update_mail_status(checking=False)
 
     def _fill_mails(self, hits: list[MailHit]):
         self.mails.setSortingEnabled(False)
@@ -230,7 +258,15 @@ class CenterPanel(QWidget):
         self.mails.resizeColumnsToContents()
         if self.mails.columnWidth(2) > 420:
             self.mails.setColumnWidth(2, 420)
-        self.mail_status.setText(f"{len(hits)} e-posta" + (f", {approved} onaylı" if approved else ""))
+
+    def _mail_btn_menu(self, pos):
+        m = QMenu(self)
+        a = QAction("Yeni mailleri ara", self)
+        a.triggered.connect(lambda: self._search_mails(force=True))
+        b = QAction("Bu NCR için tüm geçmişi yeniden tara", self)
+        b.triggered.connect(lambda: self._search_mails(force=True, full=True))
+        m.addActions([a, b])
+        m.exec(self.btn_mail_refresh.mapToGlobal(pos))
 
     def _mail_at(self, item) -> MailHit | None:
         if item is None:
@@ -245,10 +281,8 @@ class CenterPanel(QWidget):
         h = self._mail_at(item)
         if not h:
             return
-        try:
-            open_mail(h.entry_id, h.store_id)
-        except Exception as exc:  # noqa: BLE001
-            self.error.emit(f"E-posta açılamadı: {exc}")
+        self.status.emit(f"Outlook'ta açılıyor: {h.subject[:60]}")
+        self.mail.open(h)
 
     def _mail_menu(self, pos):
         h = self._mail_at(self.mails.itemAt(pos))
@@ -333,10 +367,17 @@ class CenterPanel(QWidget):
         m.addActions([a, b, c])
         m.exec(self.files.viewport().mapToGlobal(pos))
 
+    def _copy_parts(self):
+        if self.record and self.record.part_numbers:
+            QGuiApplication.clipboard().setText("\n".join(self.record.part_numbers))
+            self.status.emit(f"Panoya kopyalandı: {', '.join(self.record.part_numbers)}")
+
     def _copy_ncr(self):
         if self.record:
             QGuiApplication.clipboard().setText(self.record.ncr_no)
             self.status.emit(f"Kopyalandı: {self.record.ncr_no}")
 
-    def invalidate_mail_cache(self):
-        self._mail_cache.clear()
+    def refresh_mail_view(self):
+        if self.record is not None:
+            self._fill_mails(self.mail.hits(self.record.ncr_no))
+            self._update_mail_status(checking=self.mail.is_pending(self.record.ncr_no))

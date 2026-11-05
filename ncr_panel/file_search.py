@@ -243,6 +243,7 @@ class FileIndex:
                 entry.text = full.casefold()[:_MAX_TEXT]
             keep[key] = entry
             changed += 1
+            time.sleep(0.002)       # release the GIL so the GUI stays fluid during indexing
         self.entries = keep
         self.built_at = time.time()
         return changed

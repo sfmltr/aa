@@ -37,6 +37,8 @@ class NcrRecord:
     file_match_count: int = 0
     ncr_file_match_count: int = 0
     repetitive_count: int = 0
+    mail_count: int = 0
+    mail_approved: bool = False
 
     @property
     def key(self) -> str:
@@ -362,20 +364,30 @@ def list_sheets(path: str) -> list[str]:
 # Excel COM loader (Windows)
 # ---------------------------------------------------------------------------
 class _ExcelSession:
-    """Attach to a running Excel (keeps user's open workbook) or start a hidden one."""
+    """isolated=False: attach to the user's running Excel (needed to run the macro on the real file).
+    isolated=True : always a separate hidden Excel instance, so reading never freezes the user's Excel."""
 
-    def __init__(self):
+    def __init__(self, isolated: bool = False):
         import pythoncom  # type: ignore
         import win32com.client  # type: ignore
         pythoncom.CoInitialize()
         self._pythoncom = pythoncom
         self.owned = False
-        try:
-            self.app = win32com.client.GetActiveObject("Excel.Application")
-        except Exception:
+        self.app = None
+        if not isolated:
+            try:
+                self.app = win32com.client.GetActiveObject("Excel.Application")
+            except Exception:
+                self.app = None
+        if self.app is None:
             self.app = win32com.client.DispatchEx("Excel.Application")
             self.app.Visible = False
             self.app.DisplayAlerts = False
+            try:
+                self.app.ScreenUpdating = False
+                self.app.EnableEvents = False
+            except Exception:
+                pass
             self.owned = True
         self.opened_by_us = None
 
@@ -400,6 +412,11 @@ class _ExcelSession:
         except Exception:
             pass
         finally:
+            # drop every proxy before CoUninitialize, otherwise Excel can stay alive / hang
+            self.opened_by_us = None
+            self.app = None
+            import gc
+            gc.collect()
             try:
                 self._pythoncom.CoUninitialize()
             except Exception:
@@ -412,11 +429,14 @@ def load_with_com(cfg: AppConfig, progress: ProgressCb = None) -> ExcelData:
     ex = cfg.excel
     if not Path(ex.path).is_file():
         raise FileNotFoundError(f"Excel dosyası bulunamadı: {ex.path}")
-    session = _ExcelSession()
+    tmpdir = Path(tempfile.mkdtemp(prefix="ncrpanel_com_"))
+    copy = tmpdir / Path(ex.path).name
+    shutil.copy2(ex.path, copy)
+    session = _ExcelSession(isolated=True)
     try:
         if progress:
-            progress("Excel (COM) ile okunuyor…")
-        wb = session.workbook(ex.path, read_only=True)
+            progress("Excel (ayrı gizli Excel) ile renkler okunuyor…")
+        wb = session.workbook(str(copy), read_only=True)
         ws = None
         if ex.sheet:
             try:
@@ -455,9 +475,12 @@ def load_with_com(cfg: AppConfig, progress: ProgressCb = None) -> ExcelData:
                     colors[rnum - 1] = col
                     break
         records, headers = _build_records(rows, colors, cfg, header_row)
-        return _finish(records, headers, ws.Name, header_row, "com", [])
+        sheet_name = ws.Name
+        del ws, used, wb
+        return _finish(records, headers, sheet_name, header_row, "com", [])
     finally:
         session.close(save=False)
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def load_excel(cfg: AppConfig, progress: ProgressCb = None) -> ExcelData:

@@ -37,7 +37,7 @@ class NcrTable(QTableWidget):
         hh.setStretchLastSection(False)
         hh.setSectionResizeMode(QHeaderView.Interactive)
         hh.setHighlightSections(False)
-        self.setColumnWidth(0, 58)
+        self.setColumnWidth(0, 72)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._menu)
         self.itemSelectionChanged.connect(self._on_sel)
@@ -80,24 +80,42 @@ class NcrTable(QTableWidget):
         self.setSortingEnabled(True)
         self.resizeRowsToContents()
 
-    def refresh_badges(self):
+    def refresh_badges(self, keys: set[str] | None = None):
+        sorting = self.isSortingEnabled()
+        self.setSortingEnabled(False)
         for row in range(self.rowCount()):
             it = self.item(row, 0)
             if it is None:
                 continue
-            rec = self._records.get(it.data(KEY_ROLE))
+            key = it.data(KEY_ROLE)
+            if keys is not None and key not in keys:
+                continue
+            rec = self._records.get(key)
             if rec:
                 it.setText(self._badge_text(rec))
                 self._style_badge(it, rec)
+        self.setSortingEnabled(sorting)
+        self.fit_badge_column()
+
+    def fit_badge_column(self):
+        self.resizeColumnToContents(0)
+        if self.columnWidth(0) < 72:
+            self.setColumnWidth(0, 72)
+
+    def records(self) -> list[NcrRecord]:
+        return list(self._records.values())
 
     @staticmethod
     def _badge_text(rec: NcrRecord) -> str:
+        """Same badges for both lists: ⚠ related files, 🔁 repetitive, ✅ approval mail."""
         parts = []
         if rec.file_match_count:
             parts.append("⚠")
         if rec.repetitive_count:
             parts.append("🔁")
-        return "".join(parts)
+        if rec.mail_approved:
+            parts.append("✅")
+        return " ".join(parts)
 
     def _style_badge(self, item: QTableWidgetItem, rec: NcrRecord):
         tips = []
@@ -110,6 +128,10 @@ class NcrTable(QTableWidget):
             item.setForeground(QBrush())
         if rec.repetitive_count:
             tips.append(f"🔁 Tekrarlayan NCR: {rec.repetitive_count} eşleşme")
+        if rec.mail_approved:
+            tips.append("✅ Onay içeren e-posta var")
+        if rec.mail_count and not rec.mail_approved:
+            tips.append(f"✉ {rec.mail_count} ilgili e-posta")
         item.setToolTip("\n".join(tips))
 
     # selection --------------------------------------------------------------
@@ -302,7 +324,7 @@ class LeftPanel(QWidget):
                if (r.kind(ex) == "mrb" or (self.cfg.ui.show_other_status and r.kind(ex) == "other"))
                and eng_ok(r) and text_ok(r, q_top)]
         self.table_top.populate(top, dark, extra_cols=False, legend=self.cfg.ui.color_legend)
-        self.count_top.setText(f"{len(top)} kayıt")
+        self.count_top.setText(self._summary(top))
 
         cat = self.category.currentText()
         q_bot = self.search_bottom.text().strip()
@@ -316,22 +338,38 @@ class LeftPanel(QWidget):
                 continue
             bottom.append(r)
         self.table_bottom.populate(bottom, dark, extra_cols=True, legend=self.cfg.ui.color_legend)
-        self.count_bottom.setText(f"{len(bottom)} kayıt")
+        self.count_bottom.setText(self._summary(bottom))
         self._autosize()
 
     def _autosize(self):
         for t in (self.table_top, self.table_bottom):
             t.resizeColumnsToContents()
-            t.setColumnWidth(0, 58)
+            t.fit_badge_column()
             if t.columnWidth(3) > 320:
                 t.setColumnWidth(3, 320)
             if t.columnCount() > 6 and t.columnWidth(6) > 240:
                 t.setColumnWidth(6, 240)
             t.horizontalHeader().setStretchLastSection(True)
 
-    def refresh_badges(self):
-        self.table_top.refresh_badges()
-        self.table_bottom.refresh_badges()
+    @staticmethod
+    def _summary(recs: list[NcrRecord]) -> str:
+        parts = [f"{len(recs)} kayıt"]
+        w = sum(1 for r in recs if r.file_match_count)
+        rp = sum(1 for r in recs if r.repetitive_count)
+        ok = sum(1 for r in recs if r.mail_approved)
+        if w:
+            parts.append(f"⚠ {w}")
+        if rp:
+            parts.append(f"🔁 {rp}")
+        if ok:
+            parts.append(f"✅ {ok}")
+        return "  ·  ".join(parts)
+
+    def refresh_badges(self, keys: set[str] | None = None):
+        self.table_top.refresh_badges(keys)
+        self.table_bottom.refresh_badges(keys)
+        self.count_top.setText(self._summary(self.table_top.records()))
+        self.count_bottom.setText(self._summary(self.table_bottom.records()))
 
     def _on_selected(self, rec: NcrRecord):
         sender = self.sender()

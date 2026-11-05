@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QListWidget, QPushButton,
                                QSizePolicy, QVBoxLayout, QWidget, QInputDialog)
 
@@ -41,6 +41,23 @@ class Chip(QLabel):
         if tooltip:
             self.setToolTip(tooltip)
         self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+
+
+class CopyChip(QPushButton):
+    """A chip that copies its text to the clipboard when clicked."""
+    copied = Signal(str)
+
+    def __init__(self, text: str, tooltip: str = "Tıkla: panoya kopyala"):
+        super().__init__(text)
+        self.setObjectName("chipButton")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(tooltip)
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        self.clicked.connect(self._copy)
+
+    def _copy(self):
+        QGuiApplication.clipboard().setText(self.text())
+        self.copied.emit(self.text())
 
 
 class FlowRow(QWidget):
@@ -106,6 +123,9 @@ class PathListEditor(QWidget):
             path, ok = QInputDialog.getText(self, "Ekle", self._placeholder or "Değer:")
             if not ok:
                 path = ""
+        if self.mode in ("folder", "file"):
+            from ..utils import norm_path
+            path = norm_path(path)
         if path and path not in self.items():
             self.list.addItem(path)
             self.changed.emit()

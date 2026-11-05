@@ -17,6 +17,7 @@ from ..repetitive import annotate_records as annotate_repetitive, scan_notes
 from ..utils import IS_WINDOWS, open_path
 from .center_panel import CenterPanel
 from .left_panel import LeftPanel
+from .mail_service import MailService
 from .right_panel import RightPanel
 from .settings_dialog import SettingsDialog
 from .theme import build_stylesheet
@@ -44,8 +45,9 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.splitter)
         self.setCentralWidget(root)
 
+        self.mail = MailService(cfg, self)
         self.left = LeftPanel(cfg)
-        self.center = CenterPanel(cfg, lambda: self.index)
+        self.center = CenterPanel(cfg, lambda: self.index, self.mail)
         self.right = RightPanel(cfg)
         for w in (self.left, self.center, self.right):
             self.splitter.addWidget(w)
@@ -85,6 +87,8 @@ class MainWindow(QMainWindow):
         self.a_macro = act("▶ Makro çalıştır", self.run_macro, "Excel içindeki güncelleme makrosunu çalıştır", "F6")
         self.a_excel = act("📗 Excel'i aç", self.open_excel, "Çalışma kitabını Excel'de aç")
         tb.addSeparator()
+        self.a_mail = act("✉ Mail taraması", self.bulk_mail_scan,
+                          "Listedeki tüm NCR'lar için Outlook'u tara (yalnızca son taramadan sonra gelen mailler)", "F9")
         self.a_index = act("🗂 Dosya indeksi", self.rebuild_index, "Mail/PDF klasörlerini yeniden tara", "F7")
         self.a_notes = act("🔁 Notları tara", self.rescan_notes, "Tekrarlayan NCR notlarını yeniden oku", "F8")
         tb.addSeparator()
@@ -121,6 +125,10 @@ class MainWindow(QMainWindow):
             p.status.connect(self.set_status)
             p.error.connect(self.show_error)
         self.right.configChanged.connect(self.cfg.save)
+        self.mail.updated.connect(self.on_mail_updated)
+        self.mail.status.connect(self.set_status)
+        self.mail.error.connect(self.show_error)
+        self.mail.bulkRunning.connect(self._on_bulk_running)
         self.right.rescanNotesRequested.connect(self.rescan_notes)
 
     def _restore_layout(self):
@@ -146,6 +154,8 @@ class MainWindow(QMainWindow):
         self._save_layout()
         self.cfg.save()
         self._index_cancel.set()
+        self.mail.shutdown()
+        self.right.shutdown()
         super().closeEvent(event)
 
     # ---- theme ---------------------------------------------------------------
@@ -219,7 +229,8 @@ class MainWindow(QMainWindow):
             self.set_status(msg)
             if current:
                 self.left.reselect(current)
-            self.center.invalidate_mail_cache()
+            if self.cfg.outlook.bulk_on_refresh:
+                self.bulk_mail_scan()
 
         def err(msg):
             self._excel_loading = False
@@ -235,7 +246,51 @@ class MainWindow(QMainWindow):
             self.index.annotate_records(self.data.records, self.cfg.files)
         if self.notes:
             annotate_repetitive(self.data.records, self.notes, self.cfg.repetitive)
+        self._annotate_mail()
         self.left.refresh_badges()
+
+    def _annotate_mail(self, ncrs: set[str] | None = None) -> set[str]:
+        """Copy mail cache info (count / approval) onto records. Returns keys of touched records."""
+        keys = set()
+        if not self.data:
+            return keys
+        for r in self.data.records:
+            if ncrs is not None and r.ncr_no not in ncrs:
+                continue
+            r.mail_count = self.mail.cache.count(r.ncr_no)
+            r.mail_approved = self.mail.approved(r.ncr_no)
+            keys.add(r.key)
+        return keys
+
+    def on_mail_updated(self, ncrs: set):
+        keys = self._annotate_mail(set(ncrs))
+        if keys:
+            self.left.refresh_badges(keys)
+
+    def _listed_ncrs(self) -> list[str]:
+        if not self.data:
+            return []
+        kinds = {"mrb", "external"} | ({"other"} if self.cfg.ui.show_other_status else set())
+        return [r.ncr_no for r in self.data.records if r.kind(self.cfg.excel) in kinds]
+
+    def bulk_mail_scan(self):
+        if not self.cfg.outlook.enabled:
+            self.set_status("Outlook araması ayarlardan kapalı.")
+            return
+        if not self.mail.enabled():
+            self.set_status("Outlook erişimi yok (Windows + pywin32 + Outlook gerekir).")
+            return
+        self.mail.bulk(self._listed_ncrs())
+
+    def _on_bulk_running(self, running: bool):
+        self.a_mail.setText("✉ Mail taraması (sürüyor…)" if running else "✉ Mail taraması")
+        if running:
+            self.progress.setRange(0, 0)       # busy indicator
+            self.progress.show()
+        else:
+            self.progress.setRange(0, 1)
+            self.progress.hide()
+        self.center.refresh_mail_view()
 
     def rebuild_index(self):
         if not self.cfg.files.folders:
@@ -383,7 +438,8 @@ class MainWindow(QMainWindow):
         self.apply_theme()
         self._setup_timer()
         self.right.reload_config()
-        self.center.invalidate_mail_cache()
+        self.mail.settings_changed()
+        self.center.refresh_mail_view()
         new_files = (tuple(self.cfg.files.folders), tuple(self.cfg.files.extensions), self.cfg.files.part_regex)
         if new_files != old_files:
             if self.cfg.files.folders:

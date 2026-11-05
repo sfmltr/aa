@@ -4,7 +4,12 @@ from __future__ import annotations
 import traceback
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Slot
+
+# Strong references to running workers. Without this, Python may garbage-collect a Worker (and its
+# signals object) before the queued "finished" signal reaches the GUI thread, and the callback is
+# silently lost (e.g. the repetitive-notes scan finished but the badges never updated).
+_ACTIVE: set = set()
 
 
 class WorkerSignals(QObject):
@@ -23,7 +28,7 @@ class Worker(QRunnable):
         self.pass_progress = pass_progress
         self.signals = WorkerSignals()
         self.cancelled = False
-        self.setAutoDelete(True)
+        self.setAutoDelete(False)      # lifetime is managed by _ACTIVE
 
     def cancel(self):
         self.cancelled = True
@@ -57,5 +62,13 @@ def run_in_background(fn: Callable[..., Any], *args, on_done=None, on_error=None
         w.signals.progress.connect(on_progress)
     if on_progress_pct:
         w.signals.progress_pct.connect(on_progress_pct)
+
+    def _release(*_):
+        # defer: never drop the last reference while its own signal is being delivered
+        QTimer.singleShot(0, lambda: _ACTIVE.discard(w))
+
+    w.signals.finished.connect(_release)
+    w.signals.error.connect(_release)
+    _ACTIVE.add(w)
     QThreadPool.globalInstance().start(w)
     return w
